@@ -1,0 +1,143 @@
+{% extends "base.html" %} {% block title %}Login - Passkey Auth{% endblock %} {%
+block content %}
+<div
+  class="min-h-full flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8"
+>
+  <div class="max-w-md w-full space-y-8">
+    <div>
+      <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">
+        Sign in to your account
+      </h2>
+      <p class="mt-2 text-center text-sm text-gray-600">
+        Use your passkey to sign in securely
+      </p>
+    </div>
+    <form id="login-form" class="mt-8 space-y-6">
+      <div class="rounded-md shadow-sm -space-y-px">
+        <div>
+          <label for="username" class="sr-only">Username</label>
+          <input
+            id="username"
+            name="username"
+            type="text"
+            required
+            class="appearance-none rounded-md relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-primary focus:border-primary focus:z-10 sm:text-sm"
+            placeholder="Username"
+          />
+        </div>
+      </div>
+
+      <div>
+        <button
+          type="submit"
+          class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-primary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+        >
+          Sign in with Passkey
+        </button>
+      </div>
+    </form>
+    <div
+      id="error-message"
+      class="mt-2 text-center text-sm text-red-600 hidden"
+    ></div>
+  </div>
+</div>
+{% endblock %} {% block scripts %}
+<script>
+  document
+    .getElementById("login-form")
+    .addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const username = document.getElementById("username").value;
+      const errorMessage = document.getElementById("error-message");
+
+      try {
+        // Get authentication options
+        const optionsResponse = await fetch("/login/begin", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            username,
+            origin: window.location.origin,
+          }),
+        });
+
+        const optionsData = await optionsResponse.json();
+        if (!optionsResponse.ok) {
+          throw new Error(
+            optionsData.message || "Failed to start authentication"
+          );
+        }
+
+        // Get credential
+        const publicKeyCredentialRequestOptions = {
+          challenge: base64ToArrayBuffer(optionsData.challenge),
+          allowCredentials: optionsData.allowCredentials.map((credential) => ({
+            id: base64ToArrayBuffer(credential.id),
+            type: "public-key",
+            transports: credential.transports,
+          })),
+          timeout: optionsData.timeout,
+          rpId: optionsData.rpId,
+          userVerification: optionsData.userVerification,
+        };
+
+        const assertion = await navigator.credentials.get({
+          publicKey: publicKeyCredentialRequestOptions,
+        });
+
+        // Complete authentication
+        const completeResponse = await fetch("/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            credential_id: arrayBufferToBase64(assertion.rawId),
+            client_data_json: arrayBufferToBase64(
+              assertion.response.clientDataJSON
+            ),
+            authenticator_data: arrayBufferToBase64(
+              assertion.response.authenticatorData
+            ),
+            signature: arrayBufferToBase64(assertion.response.signature),
+            origin: window.location.origin,
+          }),
+        });
+
+        const completeData = await completeResponse.json();
+        if (!completeResponse.ok) {
+          throw new Error(completeData.message || "Authentication failed");
+        }
+
+        // Store the token and redirect
+        localStorage.setItem("auth_token", completeData.token);
+        window.location.href = "/";
+      } catch (error) {
+        errorMessage.textContent = error.message;
+        errorMessage.classList.remove("hidden");
+      }
+    });
+
+  // Utility functions for base64 conversion
+  function base64ToArrayBuffer(base64) {
+    const binaryString = window.atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return window.btoa(binary);
+  }
+</script>
+{% endblock %}

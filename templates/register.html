@@ -1,0 +1,208 @@
+{% extends "base.html" %} {% block title %}Register - Passkey Auth{% endblock %}
+{% block content %}
+<div
+  class="min-h-full flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8"
+>
+  <div class="max-w-md w-full space-y-8">
+    <div>
+      <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">
+        Create your account
+      </h2>
+      <p class="mt-2 text-center text-sm text-gray-600">
+        Register with a passkey for secure, passwordless authentication
+      </p>
+    </div>
+    <form id="register-form" class="mt-8 space-y-6">
+      <div class="rounded-md shadow-sm -space-y-px">
+        <div>
+          <label for="username" class="sr-only">Username</label>
+          <input
+            id="username"
+            name="username"
+            type="text"
+            required
+            class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-primary focus:border-primary focus:z-10 sm:text-sm"
+            placeholder="Username"
+          />
+        </div>
+        <div>
+          <label for="email" class="sr-only">Email</label>
+          <input
+            id="email"
+            name="email"
+            type="email"
+            required
+            class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-primary focus:border-primary focus:z-10 sm:text-sm"
+            placeholder="Email"
+          />
+        </div>
+        <div>
+          <label for="display-name" class="sr-only">Display Name</label>
+          <input
+            id="display-name"
+            name="display-name"
+            type="text"
+            required
+            class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-primary focus:border-primary focus:z-10 sm:text-sm"
+            placeholder="Display Name"
+          />
+        </div>
+      </div>
+
+      <div>
+        <button
+          type="submit"
+          class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-primary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+        >
+          Register with Passkey
+        </button>
+      </div>
+    </form>
+    <div
+      id="error-message"
+      class="mt-2 text-center text-sm text-red-600 hidden"
+    ></div>
+  </div>
+</div>
+{% endblock %} {% block scripts %}
+<script>
+  document
+    .getElementById("register-form")
+    .addEventListener("submit", async function (e) {
+      e.preventDefault();
+      const username = document.getElementById("username").value;
+      const email = document.getElementById("email").value;
+      const displayName = document.getElementById("display-name").value;
+      const errorMessage = document.getElementById("error-message");
+
+      try {
+        // Step 1: Register user and get challenge
+        const registerResponse = await fetch("/register", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            username,
+            email,
+            display_name: displayName,
+          }),
+        });
+
+        const challenge = await registerResponse.json();
+        if (!registerResponse.ok) {
+          throw new Error(challenge.message || "Registration failed");
+        }
+
+        console.log("Challenge received:", challenge);
+
+        // Step 2: Create credentials using the challenge object as is
+        const publicKeyCredentialCreationOptions = {
+          ...challenge.publicKey,
+          challenge: base64ToArrayBuffer(challenge.publicKey.challenge),
+          user: {
+            ...challenge.publicKey.user,
+            id: base64ToArrayBuffer(challenge.publicKey.user.id),
+          },
+        };
+
+        console.log(
+          "Creating credential with options:",
+          publicKeyCredentialCreationOptions
+        );
+
+        const credential = await navigator.credentials.create({
+          publicKey: publicKeyCredentialCreationOptions,
+        });
+
+        console.log("Credential created:", credential);
+
+        // Step 3: Complete registration with properly formatted credential data
+        const rawId = arrayBufferToBase64(credential.rawId);
+        const attestationObject = arrayBufferToBase64(
+          credential.response.attestationObject
+        );
+        const clientDataJSON = arrayBufferToBase64(
+          credential.response.clientDataJSON
+        );
+
+        console.log("Sending completion data:", {
+          username,
+          credential: {
+            id: credential.id,
+            rawId: rawId, // Changed from raw_id
+            type: credential.type,
+            response: {
+              attestationObject: attestationObject, // Changed from attestation_object
+              clientDataJSON: clientDataJSON, // Changed from client_data_json
+            },
+          },
+        });
+
+        const completeResponse = await fetch("/register/complete", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            username,
+            credential: {
+              id: credential.id,
+              rawId: rawId,
+              type: credential.type,
+              response: {
+                attestationObject: attestationObject,
+                clientDataJSON: clientDataJSON,
+              },
+            },
+          }),
+        });
+
+        if (!completeResponse.ok) {
+          const errorData = await completeResponse.text();
+          console.error("Server response:", errorData);
+          throw new Error(
+            `Registration completion failed: ${completeResponse.status} ${errorData}`
+          );
+        }
+
+        const completeData = await completeResponse.json();
+        console.log("Registration complete:", completeData);
+
+        // Registration successful, redirect to login
+        window.location.href = "/login";
+      } catch (error) {
+        console.error("Error during registration:", error);
+        errorMessage.textContent = error.message;
+        errorMessage.classList.remove("hidden");
+      }
+    });
+
+  // Utility functions remain the same
+  function base64ToArrayBuffer(base64url) {
+    if (!base64url) {
+      throw new Error("base64url string is required");
+    }
+    const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+    const normalizedBase64 = base64 + padding;
+
+    const binaryString = window.atob(normalizedBase64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = window.btoa(binary);
+    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  }
+</script>
+{% endblock %}
