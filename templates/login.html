@@ -35,6 +35,11 @@ block content %}
           Sign in with Passkey
         </button>
       </div>
+
+      <p class="text-center text-sm text-gray-600">
+        Don't have a passkey?
+        <a href="/register" class="text-primary">Register</a>
+      </p>
     </form>
     <div
       id="error-message"
@@ -52,6 +57,8 @@ block content %}
       const errorMessage = document.getElementById("error-message");
 
       try {
+        console.log("Starting authentication for user:", username);
+
         // Get authentication options
         const optionsResponse = await fetch("/login/begin", {
           method: "POST",
@@ -64,66 +71,95 @@ block content %}
           }),
         });
 
-        const optionsData = await optionsResponse.json();
         if (!optionsResponse.ok) {
-          throw new Error(
-            optionsData.message || "Failed to start authentication"
-          );
+          const error = await optionsResponse.json();
+          throw new Error(error.message || "Failed to start authentication");
         }
 
-        // Get credential
+        const optionsData = await optionsResponse.json();
+        console.log("Received authentication options:", optionsData);
+
+        // Format the options for WebAuthn API
         const publicKeyCredentialRequestOptions = {
-          challenge: base64ToArrayBuffer(optionsData.challenge),
-          allowCredentials: optionsData.allowCredentials.map((credential) => ({
-            id: base64ToArrayBuffer(credential.id),
-            type: "public-key",
-            transports: credential.transports,
-          })),
-          timeout: optionsData.timeout,
-          rpId: optionsData.rpId,
-          userVerification: optionsData.userVerification,
+          challenge: base64ToArrayBuffer(optionsData.publicKey.challenge),
+          allowCredentials: optionsData.publicKey.allowCredentials.map(
+            (credential) => ({
+              id: base64ToArrayBuffer(credential.id),
+              type: "public-key",
+              transports: credential.transports || ["internal"],
+            })
+          ),
+          timeout: optionsData.publicKey.timeout || 60000,
+          rpId: optionsData.publicKey.rpId,
+          userVerification:
+            optionsData.publicKey.userVerification || "preferred",
         };
 
+        console.log(
+          "Requesting credential with options:",
+          publicKeyCredentialRequestOptions
+        );
+
+        // Get credential from authenticator
         const assertion = await navigator.credentials.get({
           publicKey: publicKeyCredentialRequestOptions,
         });
 
+        console.log("Received assertion from authenticator:", assertion);
+
         // Complete authentication
-        const completeResponse = await fetch("/login", {
+        const completeResponse = await fetch("/login/complete", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            credential_id: arrayBufferToBase64(assertion.rawId),
-            client_data_json: arrayBufferToBase64(
-              assertion.response.clientDataJSON
-            ),
-            authenticator_data: arrayBufferToBase64(
-              assertion.response.authenticatorData
-            ),
-            signature: arrayBufferToBase64(assertion.response.signature),
+            username,
+            credential: {
+              id: assertion.id,
+              rawId: arrayBufferToBase64(assertion.rawId),
+              type: assertion.type,
+              response: {
+                authenticatorData: arrayBufferToBase64(
+                  assertion.response.authenticatorData
+                ),
+                clientDataJSON: arrayBufferToBase64(
+                  assertion.response.clientDataJSON
+                ),
+                signature: arrayBufferToBase64(assertion.response.signature),
+                userHandle: assertion.response.userHandle
+                  ? arrayBufferToBase64(assertion.response.userHandle)
+                  : null,
+              },
+            },
             origin: window.location.origin,
           }),
         });
 
-        const completeData = await completeResponse.json();
         if (!completeResponse.ok) {
-          throw new Error(completeData.message || "Authentication failed");
+          const error = await completeResponse.text();
+          throw new Error(error.message || "Authentication failed");
         }
 
-        // Store the token and redirect
-        localStorage.setItem("auth_token", completeData.token);
-        window.location.href = "/";
+        // Since we're getting HTML back, redirect to the response URL
+        window.location.href = completeResponse.url;
       } catch (error) {
+        console.error("Authentication error:", error);
         errorMessage.textContent = error.message;
         errorMessage.classList.remove("hidden");
       }
     });
 
-  // Utility functions for base64 conversion
-  function base64ToArrayBuffer(base64) {
-    const binaryString = window.atob(base64);
+  // Utility functions for base64url conversion
+  function base64ToArrayBuffer(base64url) {
+    if (!base64url) {
+      throw new Error("base64url string is required");
+    }
+    const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+    const normalizedBase64 = base64 + padding;
+
+    const binaryString = window.atob(normalizedBase64);
     const bytes = new Uint8Array(binaryString.length);
     for (let i = 0; i < binaryString.length; i++) {
       bytes[i] = binaryString.charCodeAt(i);
@@ -137,7 +173,8 @@ block content %}
     for (let i = 0; i < bytes.byteLength; i++) {
       binary += String.fromCharCode(bytes[i]);
     }
-    return window.btoa(binary);
+    const base64 = window.btoa(binary);
+    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
   }
 </script>
 {% endblock %}

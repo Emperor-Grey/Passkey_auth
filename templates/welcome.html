@@ -1,0 +1,21 @@
+{% extends "base.html" %} {% block title %}Welcome - {{ display_name }}{%
+endblock %} {% block content %}
+<div
+  class="min-h-full flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8"
+>
+  <div class="max-w-md w-full space-y-8">
+    <div>
+      <h2 class="mt-6 text-center text-3xl font-extrabold text-gray-900">
+        Welcome, {{ display_name }}!
+      </h2>
+      <div class="mt-4 space-y-4">
+        <p class="text-center text-gray-600">Username: {{ username }}</p>
+        <p class="text-center text-gray-600">Email: {{ email }}</p>
+        <p class="text-center text-gray-600">
+          Display Name: {{ display_name }}
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
