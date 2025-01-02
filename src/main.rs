@@ -51,6 +51,7 @@ async fn main() {
     let webauthn = create_webauthn();
 
     let app = Router::new()
+        .route("/", get(login_page))
         .route("/login", get(login_page))
         .route("/login/begin", post(login_begin))
         .route("/login/complete", post(login_complete))
