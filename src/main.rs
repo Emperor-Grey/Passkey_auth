@@ -59,6 +59,7 @@ async fn main() {
         .expect("Failed to bind to port");
 
     println!("Listening on http://{}", listener.local_addr().unwrap());
+    tracing::info!("Listening on http://{}", listener.local_addr().unwrap());
 
     axum::serve(
         listener,
