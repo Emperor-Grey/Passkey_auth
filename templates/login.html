@@ -63,20 +63,54 @@ block content %}
       </div>
     </form>
 
+    <!-- Loading Spinner -->
+    <div id="loading-spinner" class="hidden">
+      <div class="flex justify-center items-center">
+        <div
+          class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"
+        ></div>
+      </div>
+      <p class="mt-2 text-center text-sm text-gray-600" id="loading-text">
+        Processing...
+      </p>
+    </div>
+
+    <!-- Success Message -->
+    <div
+      id="success-message"
+      class="mt-2 text-center text-sm text-green-600 hidden"
+    ></div>
+
     <div
       id="error-message"
       class="mt-2 text-center text-sm text-red-600 hidden"
     ></div>
-    <div
-      id="loading-indicator"
-      class="mt-2 text-center text-sm text-gray-600 hidden"
-    >
-      Authenticating...
-    </div>
   </div>
 </div>
 {% endblock %} {% block scripts %}
 <script>
+  // Utility functions for UI
+  function showLoading(message = "Processing...") {
+    document.getElementById("loading-spinner").classList.remove("hidden");
+    document.getElementById("loading-text").textContent = message;
+  }
+
+  function hideLoading() {
+    document.getElementById("loading-spinner").classList.add("hidden");
+  }
+
+  function showSuccess(message) {
+    const successMessage = document.getElementById("success-message");
+    successMessage.textContent = message;
+    successMessage.classList.remove("hidden");
+  }
+
+  function showError(message) {
+    const errorMessage = document.getElementById("error-message");
+    errorMessage.textContent = message;
+    errorMessage.classList.remove("hidden");
+  }
+
   // Utility functions for base64url conversion
   function base64ToArrayBuffer(base64url) {
     const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
@@ -131,7 +165,7 @@ block content %}
         }
 
         // Show loading state
-        loadingIndicator.classList.remove("hidden");
+        showLoading("Authenticating...");
         submitButton.disabled = true;
 
         // Get authentication options from server
@@ -218,17 +252,17 @@ block content %}
           throw new Error(errorData.error || "Authentication failed");
         }
 
-        const userData = await completeResponse.json();
-        console.log("Login successful:", userData);
-
-        // Redirect to welcome page
-        window.location.href = "/welcome";
+        const responseData = await completeResponse.json();
+        if (responseData.redirect_url) {
+          window.location.href = responseData.redirect_url;
+        } else {
+          throw new Error("No redirect URL received from server");
+        }
       } catch (error) {
         console.error("Authentication error:", error);
-        errorMessage.textContent = error.message;
-        errorMessage.classList.remove("hidden");
+        showError(error.message);
       } finally {
-        loadingIndicator.classList.add("hidden");
+        hideLoading();
         submitButton.disabled = false;
       }
     });

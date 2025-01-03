@@ -4,7 +4,9 @@ use axum::{
     response::{Html, IntoResponse},
     Json,
 };
-use reqwest::StatusCode;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use reqwest::{header, StatusCode};
 use serde_json::json;
 use sqlx::MySqlPool;
 use uuid::Uuid;
@@ -312,10 +314,18 @@ pub async fn login_complete(
     .await;
 
     // Return user data
-    Ok(Json(json!({
+    let user_data = json!({
         "username": auth_data.username,
         "email": auth_data.email,
         "display_name": auth_data.display_name,
+    });
+
+    let user_data_string = serde_json::to_string(&user_data)
+        .map_err(|_| AppError::Internal("Failed to serialize user data".to_string()))?;
+    let user_data_encoded = STANDARD.encode(user_data_string);
+
+    Ok(Json(json!({
+        "redirect_url": format!("/welcome?user_data={}", user_data_encoded)
     })))
 }
 

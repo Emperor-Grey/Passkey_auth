@@ -7,6 +7,7 @@ edition = "2021"
 webauthn-rs = { version = "0.5.1", features = [
     "danger-allow-state-serialisation",
 ] }
+base64 = "0.22.1"
 
 dotenv = "0.15.0"
 uuid = { version = "1.11.0", features = ["v4"] }
