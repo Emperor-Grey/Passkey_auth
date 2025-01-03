@@ -7,6 +7,7 @@ use api::{
     register_begin, register_complete,
     routes::create_router,
 };
+
 use askama::Template;
 use config::{connect_db, tracing::set_up_tracing, web_authn::create_webauthn};
 use reqwest::{Method, StatusCode, Url};
@@ -14,6 +15,7 @@ use serde::Serialize;
 use sqlx::MySqlPool;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
+
 use tower_http::cors::{Any, CorsLayer};
 use webauthn_rs::{
     Webauthn, WebauthnBuilder,

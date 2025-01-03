@@ -1,15 +1,15 @@
 use askama::Template;
 use axum::{
+    Json,
     extract::State,
     response::{Html, IntoResponse},
-    Json,
 };
 use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::MySqlPool;
 use webauthn_rs::{
-    prelude::{CreationChallengeResponse, Passkey, PasskeyRegistration},
     Webauthn,
+    prelude::{CreationChallengeResponse, Passkey, PasskeyRegistration},
 };
 
 use crate::models::{
@@ -24,12 +24,11 @@ pub async fn register_begin(
 ) -> Json<CreationChallengeResponse> {
     let user_id = uuid::Uuid::new_v4();
 
-    // Generate the challenge using webauthn.rs
+    // Generate the challenge
     let (challenge_res, passkey_reg) = webauthn
         .start_passkey_registration(user_id, &req.username, &req.display_name, None)
         .expect("Failed to start the registration");
 
-    // Log the challenge response for debugging
     // tracing::info!("Challenge response: {:?}", challenge_res);
 
     // Store user in the database
@@ -59,7 +58,7 @@ pub async fn register_begin(
     .await
     .expect("Failed to insert registration state");
 
-    // Return the challenge response to the frontend
+    // Return the challenge
     Json(challenge_res)
 }
 
@@ -102,7 +101,6 @@ pub async fn register_complete(
     .await
     .expect("Failed to store passkey");
 
-    // Return a success response to the frontend
     Json(json!({ "status": "success" })).into_response()
 }
 

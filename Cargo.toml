@@ -10,7 +10,7 @@ webauthn-rs = { version = "0.5.1", features = [
 
 dotenv = "0.15.0"
 uuid = { version = "1.11.0", features = ["v4"] }
-tower-http = { version = "0.6.2", features = ["cors"] }
+tower-http = { version = "0.6.2", features = ["cors", "trace", "fs"] }
 
 tokio = { version = "1.42.0", features = ["full"] }
 serde = { version = "1.0.217", features = ["derive"] }

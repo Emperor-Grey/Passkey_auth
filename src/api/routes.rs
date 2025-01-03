@@ -14,7 +14,7 @@ use crate::api::{
 
 pub fn create_router(db: MySqlPool, webauthn: Webauthn) -> Router {
     Router::new()
-        .route("/", get(login_page))
+        // .route("/", get(login_page))
         .route("/login", get(login_page))
         .route("/login/begin", post(login_begin))
         .route("/login/complete", post(login_complete))
