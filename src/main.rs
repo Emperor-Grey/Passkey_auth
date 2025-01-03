@@ -18,16 +18,16 @@ use tokio::net::TcpListener;
 
 use tower_http::cors::{Any, CorsLayer};
 use webauthn_rs::{
-    prelude::{CreationChallengeResponse, Passkey, PasskeyRegistration},
     Webauthn, WebauthnBuilder,
+    prelude::{CreationChallengeResponse, Passkey, PasskeyRegistration},
 };
 
 use axum::{
+    Json, Router,
     extract::State,
     http::request::Builder,
     response::{Html, IntoResponse},
     routing::{get, post},
-    Json, Router,
 };
 use serde_json::json;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

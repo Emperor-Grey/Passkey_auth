@@ -1,6 +1,6 @@
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
 use reqwest::Method;
 use sqlx::MySqlPool;

@@ -1,8 +1,8 @@
 use askama::Template;
 use axum::extract::Query;
 use axum::response::{Html, IntoResponse};
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use reqwest::StatusCode;
 use serde::Deserialize;
 

@@ -1,18 +1,18 @@
 use askama::Template;
 use axum::{
+    Json,
     extract::State,
     response::{Html, IntoResponse},
-    Json,
 };
-use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use reqwest::{header, StatusCode};
+use base64::engine::general_purpose::STANDARD;
+use reqwest::{StatusCode, header};
 use serde_json::json;
 use sqlx::MySqlPool;
 use uuid::Uuid;
 use webauthn_rs::{
-    prelude::{CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration},
     Webauthn,
+    prelude::{CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration},
 };
 
 use crate::models::{
