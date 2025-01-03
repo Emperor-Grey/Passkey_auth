@@ -18,16 +18,16 @@ use tokio::net::TcpListener;
 
 use tower_http::cors::{Any, CorsLayer};
 use webauthn_rs::{
-    Webauthn, WebauthnBuilder,
     prelude::{CreationChallengeResponse, Passkey, PasskeyRegistration},
+    Webauthn, WebauthnBuilder,
 };
 
 use axum::{
-    Json, Router,
     extract::State,
     http::request::Builder,
     response::{Html, IntoResponse},
     routing::{get, post},
+    Json, Router,
 };
 use serde_json::json;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -48,7 +48,12 @@ async fn main() {
 
     let app = create_router(db, create_webauthn());
 
-    let host = SocketAddr::from(([0, 0, 0, 0], 3000));
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(3000);
+
+    let host = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(host)
         .await
         .expect("Failed to bind to port");
