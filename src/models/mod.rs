@@ -1,3 +1,3 @@
-pub mod model;
-
-pub use model::{CreateAccountRequest, LoginAccountRequest};
+pub mod auth;
+pub mod templates;
+pub mod user;
