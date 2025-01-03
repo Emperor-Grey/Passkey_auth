@@ -8,11 +8,12 @@ use models::{
     },
     CreateAccountRequest, LoginAccountRequest,
 };
-use reqwest::{StatusCode, Url};
+use reqwest::{Method, StatusCode, Url};
 use serde::Serialize;
 use sqlx::MySqlPool;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
+use tower_http::cors::{Any, CorsLayer};
 use webauthn_rs::{
     prelude::{CreationChallengeResponse, Passkey, PasskeyRegistration},
     Webauthn, WebauthnBuilder,
@@ -59,9 +60,15 @@ async fn main() {
         .route("/register", post(register_begin))
         .route("/register/complete", post(register_complete))
         .route("/welcome", get(welcome_page))
+        .layer(CorsLayer::new().allow_origin(Any).allow_methods([
+            Method::GET,
+            Method::PUT,
+            Method::POST,
+            Method::DELETE,
+        ]))
         .with_state((db, webauthn));
 
-    let host = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let host = SocketAddr::from(([0, 0, 0, 0], 3000));
     let listener = TcpListener::bind(host)
         .await
         .expect("Failed to bind to port");
@@ -96,8 +103,8 @@ async fn welcome_page() -> impl IntoResponse {
     )
 }
 pub fn create_webauthn() -> Webauthn {
-    let rp_id = "localhost".to_string();
-    let rp_origin = Url::parse("http://localhost:3000").unwrap();
+    let rp_id = "passkey-auth-nzbh.onrender.com".to_string();
+    let rp_origin = Url::parse("https://passkey-auth-nzbh.onrender.com").unwrap();
     let builder = WebauthnBuilder::new(&rp_id, &rp_origin).unwrap();
     builder.build().unwrap()
 }
