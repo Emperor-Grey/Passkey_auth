@@ -30,84 +30,162 @@ block content %}
       <div>
         <button
           type="submit"
-          class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-primary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+          class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
         >
+          <span class="absolute left-0 inset-y-0 flex items-center pl-3">
+            <svg
+              class="h-5 w-5 text-primary-dark group-hover:text-primary"
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path
+                fill-rule="evenodd"
+                d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 116 0z"
+                clip-rule="evenodd"
+              />
+            </svg>
+          </span>
           Sign in with Passkey
         </button>
       </div>
 
-      <p class="text-center text-sm text-gray-600">
-        Don't have a passkey?
-        <a href="/register" class="text-primary">Register</a>
-      </p>
+      <div class="flex items-center justify-center">
+        <div class="text-sm">
+          <a
+            href="/register"
+            class="font-medium text-primary hover:text-primary-dark"
+          >
+            Don't have an account? Register here
+          </a>
+        </div>
+      </div>
     </form>
+
     <div
       id="error-message"
       class="mt-2 text-center text-sm text-red-600 hidden"
     ></div>
+    <div
+      id="loading-indicator"
+      class="mt-2 text-center text-sm text-gray-600 hidden"
+    >
+      Authenticating...
+    </div>
   </div>
 </div>
 {% endblock %} {% block scripts %}
 <script>
+  // Utility functions for base64url conversion
+  function base64ToArrayBuffer(base64url) {
+    const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
+    const padding = "=".repeat((4 - (base64.length % 4)) % 4);
+    const normalizedBase64 = base64 + padding;
+
+    const binaryString = window.atob(normalizedBase64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+  }
+
+  function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = window.btoa(binary);
+    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  }
+
+  // Check WebAuthn support
+  if (!window.PublicKeyCredential) {
+    const errorMessage = document.getElementById("error-message");
+    errorMessage.textContent =
+      "Your browser does not support WebAuthn/Passkeys. Please use a modern browser.";
+    errorMessage.classList.remove("hidden");
+    document.querySelector('button[type="submit"]').disabled = true;
+  }
+
   document
     .getElementById("login-form")
     .addEventListener("submit", async function (e) {
       e.preventDefault();
+
       const username = document.getElementById("username").value;
       const errorMessage = document.getElementById("error-message");
+      const loadingIndicator = document.getElementById("loading-indicator");
+      const submitButton = this.querySelector('button[type="submit"]');
+
+      // Reset UI state
+      errorMessage.classList.add("hidden");
+      errorMessage.textContent = "";
 
       try {
-        console.log("Starting authentication for user:", username);
+        // Basic validation
+        if (!username || username.trim() === "") {
+          throw new Error("Username is required");
+        }
 
-        // Get authentication options
+        // Show loading state
+        loadingIndicator.classList.remove("hidden");
+        submitButton.disabled = true;
+
+        // Get authentication options from server
         const optionsResponse = await fetch("/login/begin", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            username,
-            origin: window.location.origin,
-          }),
+          body: JSON.stringify({ username }),
         });
 
         if (!optionsResponse.ok) {
           const error = await optionsResponse.json();
-          throw new Error(error.message || "Failed to start authentication");
+          throw new Error(error.error || "Failed to start authentication");
         }
 
         const optionsData = await optionsResponse.json();
-        console.log("Received authentication options:", optionsData);
 
-        // Format the options for WebAuthn API
+        // Validate server response
+        if (!optionsData.publicKey || !optionsData.publicKey.challenge) {
+          throw new Error(
+            "Invalid authentication options received from server"
+          );
+        }
+
+        // Prepare WebAuthn request options
         const publicKeyCredentialRequestOptions = {
           challenge: base64ToArrayBuffer(optionsData.publicKey.challenge),
-          allowCredentials: optionsData.publicKey.allowCredentials.map(
-            (credential) => ({
+          allowCredentials:
+            optionsData.publicKey.allowCredentials?.map((credential) => ({
               id: base64ToArrayBuffer(credential.id),
               type: "public-key",
-              transports: credential.transports || ["internal"],
-            })
-          ),
+              transports: credential.transports || [
+                "internal",
+                "usb",
+                "ble",
+                "nfc",
+              ],
+            })) || [],
           timeout: optionsData.publicKey.timeout || 60000,
-          rpId: optionsData.publicKey.rpId,
-          userVerification:
-            optionsData.publicKey.userVerification || "preferred",
+          rpId: window.location.hostname,
+          userVerification: "preferred",
         };
 
-        console.log(
-          "Requesting credential with options:",
-          publicKeyCredentialRequestOptions
-        );
-
-        // Get credential from authenticator
+        // Request credential from authenticator
         const assertion = await navigator.credentials.get({
           publicKey: publicKeyCredentialRequestOptions,
         });
 
-        console.log("Received assertion from authenticator:", assertion);
+        if (!assertion) {
+          throw new Error("No credential received from authenticator");
+        }
 
-        // Complete authentication
+        // Complete authentication with server
         const completeResponse = await fetch("/login/complete", {
           method: "POST",
           headers: {
@@ -132,16 +210,14 @@ block content %}
                   : null,
               },
             },
-            origin: window.location.origin,
           }),
         });
 
         if (!completeResponse.ok) {
-          const error = await completeResponse.text();
-          throw new Error(error.message || "Authentication failed");
+          const errorData = await completeResponse.json();
+          throw new Error(errorData.error || "Authentication failed");
         }
 
-        // Parse the JSON response
         const userData = await completeResponse.json();
         console.log("Login successful:", userData);
 
@@ -151,34 +227,10 @@ block content %}
         console.error("Authentication error:", error);
         errorMessage.textContent = error.message;
         errorMessage.classList.remove("hidden");
+      } finally {
+        loadingIndicator.classList.add("hidden");
+        submitButton.disabled = false;
       }
     });
-
-  // Utility functions for base64url conversion
-  function base64ToArrayBuffer(base64url) {
-    if (!base64url) {
-      throw new Error("base64url string is required");
-    }
-    const base64 = base64url.replace(/-/g, "+").replace(/_/g, "/");
-    const padding = "=".repeat((4 - (base64.length % 4)) % 4);
-    const normalizedBase64 = base64 + padding;
-
-    const binaryString = window.atob(normalizedBase64);
-    const bytes = new Uint8Array(binaryString.length);
-    for (let i = 0; i < binaryString.length; i++) {
-      bytes[i] = binaryString.charCodeAt(i);
-    }
-    return bytes.buffer;
-  }
-
-  function arrayBufferToBase64(buffer) {
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    for (let i = 0; i < bytes.byteLength; i++) {
-      binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = window.btoa(binary);
-    return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
-  }
 </script>
 {% endblock %}

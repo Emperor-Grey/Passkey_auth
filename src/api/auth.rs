@@ -7,14 +7,15 @@ use axum::{
 use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::MySqlPool;
+use uuid::Uuid;
 use webauthn_rs::{
-    prelude::{CreationChallengeResponse, Passkey, PasskeyRegistration},
+    prelude::{CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration},
     Webauthn,
 };
 
 use crate::models::{
     auth::{LoginCompleteRequest, RegisterCompleteRequest},
-    templates::WelcomeTemplate,
+    templates::{LoginTemplate, WelcomeTemplate},
     user::{CreateAccountRequest, LoginAccountRequest},
 };
 pub async fn register_begin(
@@ -203,118 +204,136 @@ pub async fn register_complete(
 
     Json(json!({ "status": "success" })).into_response()
 }
-
 pub async fn login_begin(
     State((db, webauthn)): State<(MySqlPool, Webauthn)>,
     Json(req): Json<LoginAccountRequest>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, AppError> {
+    // Validate username
+    let username = req.username.trim();
+    if username.is_empty() {
+        return Err(AppError::BadRequest("Username is required".to_string()));
+    }
+
+    // Get user and passkeys
     let user = sqlx::query!(
         "SELECT id, username FROM users WHERE username = ?",
-        req.username
+        username
     )
     .fetch_one(&db)
     .await
-    .map_err(|_| (StatusCode::NOT_FOUND, "User not found"))
-    .expect("User not found");
+    .map_err(|_| AppError::NotFound("User not found".to_string()))?;
 
-    let user_id = uuid::Uuid::from_slice(&user.id)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Invalid user ID"))
-        .expect("Invalid user ID");
+    let user_id = Uuid::from_slice(&user.id)
+        .map_err(|_| AppError::Internal("Invalid user ID format".to_string()))?;
 
     let passkeys = sqlx::query!("SELECT passkey FROM passkeys WHERE user_id = ?", user.id)
         .fetch_all(&db)
         .await
-        .map_err(|_| (StatusCode::NOT_FOUND, "No passkeys found"))
-        .expect("No passkeys found");
+        .map_err(|_| AppError::NotFound("No passkeys found".to_string()))?;
 
     let passkey_list: Vec<Passkey> = passkeys
         .iter()
-        .map(|row| serde_json::from_slice(&row.passkey).expect("Failed to deserialize passkey"))
+        .filter_map(|row| serde_json::from_slice(&row.passkey).ok())
         .collect();
 
+    if passkey_list.is_empty() {
+        return Err(AppError::BadRequest(
+            "No valid passkeys found for user".to_string(),
+        ));
+    }
+
+    // Start authentication
     let (auth_challenge, auth_state) = webauthn
         .start_passkey_authentication(&passkey_list)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-        .expect("Failed to start authentication");
+        .map_err(|e| AppError::Internal(format!("Failed to start authentication: {}", e)))?;
 
-    // Serialize the auth state to JSON before storing
-    let serialized_state = serde_json::to_vec(&auth_state).expect("Failed to serialize auth state");
+    // Clean up any existing auth state
+    let _ = sqlx::query!("DELETE FROM auth_state WHERE user_id = ?", user.id)
+        .execute(&db)
+        .await;
 
-    let auth_state_id = uuid::Uuid::new_v4();
+    // Store new auth state
+    let auth_state_id = Uuid::new_v4();
+    let serialized_state = serde_json::to_vec(&auth_state)
+        .map_err(|_| AppError::Internal("Failed to serialize auth state".to_string()))?;
+
     sqlx::query!(
-        "INSERT INTO auth_state (id, user_id, auth_state) VALUES (?, ?, ?)",
+        "INSERT INTO auth_state (id, user_id, auth_state, created_at) VALUES (?, ?, ?, NOW())",
         auth_state_id.as_bytes().to_vec(),
         user.id,
         serialized_state.as_slice(),
     )
     .execute(&db)
     .await
-    .expect("Failed to store auth state");
+    .map_err(|e| AppError::Internal(format!("Failed to store auth state: {}", e)))?;
 
-    Json(auth_challenge)
+    Ok(Json(auth_challenge))
 }
 
 pub async fn login_complete(
     State((db, webauthn)): State<(MySqlPool, Webauthn)>,
     Json(req): Json<LoginCompleteRequest>,
-) -> impl IntoResponse {
-    // Retrieve the auth state and user information from the database
+) -> Result<impl IntoResponse, AppError> {
+    // Get auth state and user data
     let auth_data = sqlx::query!(
-        "SELECT auth_state.auth_state, auth_state.user_id FROM auth_state
-         INNER JOIN users ON users.id = auth_state.user_id
-         WHERE users.username = ?",
+        r#"
+        SELECT
+            auth_state.auth_state,
+            auth_state.user_id,
+            users.username,
+            users.email,
+            users.display_name
+        FROM auth_state
+        INNER JOIN users ON users.id = auth_state.user_id
+        WHERE users.username = ?
+        AND auth_state.created_at > DATE_SUB(NOW(), INTERVAL 5 MINUTE)
+        "#,
         req.username
     )
     .fetch_one(&db)
     .await
-    .expect("Failed to retrieve auth state");
+    .map_err(|_| AppError::BadRequest("Invalid or expired authentication state".to_string()))?;
 
-    // Deserialize the auth state
-    let auth_state =
-        serde_json::from_slice(&auth_data.auth_state).expect("Failed to deserialize auth state");
+    // Deserialize auth state
+    let auth_state: PasskeyAuthentication = serde_json::from_slice(&auth_data.auth_state)
+        .map_err(|_| AppError::Internal("Failed to deserialize auth state".to_string()))?;
 
-    // Verify the authentication with webauthn
-    webauthn
+    // Verify the authentication
+    let _auth_result = webauthn
         .finish_passkey_authentication(&req.credential, &auth_state)
-        .expect("Failed to complete authentication");
+        .map_err(|e| AppError::BadRequest(format!("Authentication failed: {}", e)))?;
 
-    // Generate a session token (you might want to use a proper JWT library)
-    let token = uuid::Uuid::new_v4().to_string();
-
-    // Clean up the auth state from the database
-    sqlx::query!(
+    // Clean up the auth state
+    let _ = sqlx::query!(
         "DELETE FROM auth_state WHERE user_id = ?",
         auth_data.user_id
     )
     .execute(&db)
-    .await
-    .expect("Failed to clean up auth state");
+    .await;
 
-    // Get user data
-    let user = sqlx::query!(
-        "SELECT username, email, display_name FROM users WHERE id = ?",
-        auth_data.user_id
-    )
-    .fetch_one(&db)
-    .await
-    .expect("Failed to fetch user data");
+    // Return user data
+    Ok(Json(json!({
+        "username": auth_data.username,
+        "email": auth_data.email,
+        "display_name": auth_data.display_name,
+    })))
+}
 
-    Json(json!({
-        "username": user.username,
-        "email": user.email,
-        "display_name": user.display_name
-    }))
-    .into_response()
+#[derive(Debug)]
+pub enum AppError {
+    BadRequest(String),
+    NotFound(String),
+    Internal(String),
+}
 
-    // // Instead of returning JSON, render the welcome template with user data
-    // Html(
-    //     WelcomeTemplate {
-    //         username: user.username,
-    //         email: user.email,
-    //         display_name: user.display_name,
-    //     }
-    //     .render()
-    //     .unwrap(),
-    // )
-    // .into_response()
+impl IntoResponse for AppError {
+    fn into_response(self) -> axum::response::Response {
+        let (status, message) = match self {
+            AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            AppError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
+        };
+
+        (status, Json(json!({ "error": message }))).into_response()
+    }
 }
