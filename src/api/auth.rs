@@ -1,15 +1,15 @@
 use askama::Template;
 use axum::{
-    Json,
     extract::State,
     response::{Html, IntoResponse},
+    Json,
 };
 use reqwest::StatusCode;
 use serde_json::json;
 use sqlx::MySqlPool;
 use webauthn_rs::{
-    Webauthn,
     prelude::{CreationChallengeResponse, Passkey, PasskeyRegistration},
+    Webauthn,
 };
 
 use crate::models::{
@@ -17,22 +17,52 @@ use crate::models::{
     templates::WelcomeTemplate,
     user::{CreateAccountRequest, LoginAccountRequest},
 };
-
 pub async fn register_begin(
     State((db, webauthn)): State<(MySqlPool, Webauthn)>,
     Json(req): Json<CreateAccountRequest>,
-) -> Json<CreationChallengeResponse> {
+) -> impl IntoResponse {
     let user_id = uuid::Uuid::new_v4();
 
-    // Generate the challenge
-    let (challenge_res, passkey_reg) = webauthn
-        .start_passkey_registration(user_id, &req.username, &req.display_name, None)
-        .expect("Failed to start the registration");
+    // Check if user already exists
+    let existing_user = sqlx::query!(
+        "SELECT username FROM users WHERE username = ?",
+        req.username
+    )
+    .fetch_optional(&db)
+    .await
+    .expect("Failed to check existing user");
 
-    // tracing::info!("Challenge response: {:?}", challenge_res);
+    if existing_user.is_some() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": "Username already exists"
+            })),
+        )
+            .into_response();
+    }
+
+    // Generate the challenge
+    let (challenge_res, passkey_reg) = match webauthn.start_passkey_registration(
+        user_id,
+        &req.username,
+        &req.display_name,
+        None,
+    ) {
+        Ok(result) => result,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "error": format!("Failed to start registration: {}", e)
+                })),
+            )
+                .into_response();
+        }
+    };
 
     // Store user in the database
-    sqlx::query!(
+    if let Err(e) = sqlx::query!(
         "INSERT INTO users (id, username, email, display_name) VALUES (?, ?, ?, ?)",
         user_id.as_bytes().to_vec(),
         req.username,
@@ -41,14 +71,22 @@ pub async fn register_begin(
     )
     .execute(&db)
     .await
-    .expect("Failed to insert user");
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("Failed to insert user: {}", e)
+            })),
+        )
+            .into_response();
+    }
 
-    // Store registration state (passkey registration) in the database
+    // Store registration state
     let reg_state_id = uuid::Uuid::new_v4();
     let serialized_reg =
         serde_json::to_vec(&passkey_reg).expect("Failed to serialize registration state");
 
-    sqlx::query!(
+    if let Err(e) = sqlx::query!(
         "INSERT INTO registration_state (id, user_id, passkey_registration) VALUES (?, ?, ?)",
         reg_state_id.as_bytes().to_vec(),
         user_id.as_bytes().to_vec(),
@@ -56,18 +94,34 @@ pub async fn register_begin(
     )
     .execute(&db)
     .await
-    .expect("Failed to insert registration state");
+    {
+        // Clean up the user if registration state fails
+        let _ = sqlx::query!(
+            "DELETE FROM users WHERE id = ?",
+            user_id.as_bytes().to_vec()
+        )
+        .execute(&db)
+        .await;
+
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("Failed to store registration state: {}", e)
+            })),
+        )
+            .into_response();
+    }
 
     // Return the challenge
-    Json(challenge_res)
+    Json(challenge_res).into_response()
 }
 
 pub async fn register_complete(
     State((db, webauthn)): State<(MySqlPool, Webauthn)>,
     Json(req): Json<RegisterCompleteRequest>,
 ) -> impl IntoResponse {
-    // Retrieve the registration state from the database using the username
-    let reg_state = sqlx::query!(
+    // Retrieve the registration state
+    let reg_state = match sqlx::query!(
         "SELECT registration_state.user_id, passkey_registration FROM registration_state
          INNER JOIN users ON users.id = registration_state.user_id
          WHERE users.username = ?",
@@ -75,31 +129,77 @@ pub async fn register_complete(
     )
     .fetch_one(&db)
     .await
-    .expect("Failed to retrieve registration state");
+    {
+        Ok(state) => state,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!("Registration state not found: {}", e)
+                })),
+            )
+                .into_response();
+        }
+    };
 
     // Deserialize the passkey registration state
-    let passkey_reg: PasskeyRegistration = serde_json::from_slice(&reg_state.passkey_registration)
-        .expect("Failed to deserialize registration state");
+    let passkey_reg: PasskeyRegistration =
+        match serde_json::from_slice(&reg_state.passkey_registration) {
+            Ok(reg) => reg,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({
+                        "error": format!("Failed to deserialize registration state: {}", e)
+                    })),
+                )
+                    .into_response();
+            }
+        };
 
-    // Finish the registration process using the WebAuthn API
-    let cred = webauthn
-        .finish_passkey_registration(&req.credential, &passkey_reg)
-        .expect("Failed to complete registration");
+    // Finish the registration process
+    let cred = match webauthn.finish_passkey_registration(&req.credential, &passkey_reg) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "error": format!("Failed to complete registration: {}", e)
+                })),
+            )
+                .into_response();
+        }
+    };
 
-    // Serialize the credential to JSON first, then to bytes
+    // Store the passkey
+    let passkey_id = uuid::Uuid::new_v4();
     let serialized_cred = serde_json::to_vec(&cred).expect("Failed to serialize credential");
 
-    // Store the passkey in the database
-    let passkey_id = uuid::Uuid::new_v4();
-    sqlx::query!(
+    if let Err(e) = sqlx::query!(
         "INSERT INTO passkeys (id, user_id, passkey) VALUES (?, ?, ?)",
         passkey_id.as_bytes().to_vec(),
         reg_state.user_id,
-        serialized_cred.as_slice(), // Use as_slice() to get a &[u8]
+        serialized_cred.as_slice(),
     )
     .execute(&db)
     .await
-    .expect("Failed to store passkey");
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({
+                "error": format!("Failed to store passkey: {}", e)
+            })),
+        )
+            .into_response();
+    }
+
+    // Clean up registration state
+    let _ = sqlx::query!(
+        "DELETE FROM registration_state WHERE user_id = ?",
+        reg_state.user_id
+    )
+    .execute(&db)
+    .await;
 
     Json(json!({ "status": "success" })).into_response()
 }
@@ -199,15 +299,22 @@ pub async fn login_complete(
     .await
     .expect("Failed to fetch user data");
 
-    // Instead of returning JSON, render the welcome template with user data
-    Html(
-        WelcomeTemplate {
-            username: user.username,
-            email: user.email,
-            display_name: user.display_name,
-        }
-        .render()
-        .unwrap(),
-    )
+    Json(json!({
+        "username": user.username,
+        "email": user.email,
+        "display_name": user.display_name
+    }))
     .into_response()
+
+    // // Instead of returning JSON, render the welcome template with user data
+    // Html(
+    //     WelcomeTemplate {
+    //         username: user.username,
+    //         email: user.email,
+    //         display_name: user.display_name,
+    //     }
+    //     .render()
+    //     .unwrap(),
+    // )
+    // .into_response()
 }

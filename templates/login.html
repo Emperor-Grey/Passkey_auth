@@ -141,8 +141,12 @@ block content %}
           throw new Error(error.message || "Authentication failed");
         }
 
-        // Since we're getting HTML back, redirect to the response URL
-        window.location.href = completeResponse.url;
+        // Parse the JSON response
+        const userData = await completeResponse.json();
+        console.log("Login successful:", userData);
+
+        // Redirect to welcome page
+        window.location.href = "/welcome";
       } catch (error) {
         console.error("Authentication error:", error);
         errorMessage.textContent = error.message;

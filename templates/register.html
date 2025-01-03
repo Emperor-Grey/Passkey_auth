@@ -12,8 +12,23 @@
         Register with a passkey for secure, passwordless authentication
       </p>
     </div>
+
+    <!-- Loading Spinner -->
+    <div id="loading-spinner" class="hidden">
+      <div class="flex justify-center items-center">
+        <div
+          class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"
+        ></div>
+      </div>
+      <p class="mt-2 text-center text-sm text-gray-600" id="loading-text">
+        Processing...
+      </p>
+    </div>
+
+    <!-- Registration Form -->
     <form id="register-form" class="mt-8 space-y-6">
       <div class="rounded-md shadow-sm -space-y-px">
+        <!-- Username Field -->
         <div>
           <label for="username" class="sr-only">Username</label>
           <input
@@ -23,8 +38,12 @@
             required
             class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-primary focus:border-primary focus:z-10 sm:text-sm"
             placeholder="Username"
+            pattern="[a-zA-Z0-9_-]{3,20}"
+            title="Username must be between 3 and 20 characters and can only contain letters, numbers, underscores, and hyphens"
           />
         </div>
+
+        <!-- Email Field -->
         <div>
           <label for="email" class="sr-only">Email</label>
           <input
@@ -36,6 +55,8 @@
             placeholder="Email"
           />
         </div>
+
+        <!-- Display Name Field -->
         <div>
           <label for="display-name" class="sr-only">Display Name</label>
           <input
@@ -45,37 +66,118 @@
             required
             class="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-primary focus:border-primary focus:z-10 sm:text-sm"
             placeholder="Display Name"
+            minlength="2"
+            maxlength="50"
           />
         </div>
       </div>
 
+      <!-- Submit Button -->
       <div>
         <button
           type="submit"
-          class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-primary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary"
+          class="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-primary hover:bg-primary-dark focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary transition-colors duration-200"
         >
           Register with Passkey
         </button>
       </div>
+
+      <!-- Login Link -->
+      <div class="text-center">
+        <p class="text-sm text-gray-600">
+          Already have an account?
+          <a
+            href="/login"
+            class="font-medium text-primary hover:text-primary-dark"
+          >
+            Sign in
+          </a>
+        </p>
+      </div>
     </form>
+
+    <!-- Error Message -->
     <div
       id="error-message"
-      class="mt-2 text-center text-sm text-red-600 hidden"
+      class="mt-2 text-center text-sm text-red-600 hidden rounded-md bg-red-50 p-4"
+    ></div>
+
+    <!-- Success Message -->
+    <div
+      id="success-message"
+      class="mt-2 text-center text-sm text-green-600 hidden rounded-md bg-green-50 p-4"
     ></div>
   </div>
 </div>
 {% endblock %} {% block scripts %}
 <script>
-  document
-    .getElementById("register-form")
-    .addEventListener("submit", async function (e) {
+  document.addEventListener("DOMContentLoaded", function () {
+    const form = document.getElementById("register-form");
+    const errorMessage = document.getElementById("error-message");
+    const successMessage = document.getElementById("success-message");
+    const loadingSpinner = document.getElementById("loading-spinner");
+    const loadingText = document.getElementById("loading-text");
+
+    // Helper function to show loading state
+    function showLoading(message = "Processing...") {
+      loadingSpinner.classList.remove("hidden");
+      loadingText.textContent = message;
+      form.classList.add("opacity-50", "pointer-events-none");
+    }
+
+    // Helper function to hide loading state
+    function hideLoading() {
+      loadingSpinner.classList.add("hidden");
+      form.classList.remove("opacity-50", "pointer-events-none");
+    }
+
+    // Helper function to show error
+    function showError(message) {
+      errorMessage.textContent = message;
+      errorMessage.classList.remove("hidden");
+      successMessage.classList.add("hidden");
+    }
+
+    // Helper function to show success
+    function showSuccess(message) {
+      successMessage.textContent = message;
+      successMessage.classList.remove("hidden");
+      errorMessage.classList.add("hidden");
+    }
+
+    // Form validation
+    function validateForm(username, email, displayName) {
+      const usernameRegex = /^[a-zA-Z0-9_-]{3,20}$/;
+      if (!usernameRegex.test(username)) {
+        throw new Error(
+          "Username must be between 3 and 20 characters and can only contain letters, numbers, underscores, and hyphens"
+        );
+      }
+
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        throw new Error("Please enter a valid email address");
+      }
+
+      if (displayName.length < 2 || displayName.length > 50) {
+        throw new Error("Display name must be between 2 and 50 characters");
+      }
+    }
+
+    form.addEventListener("submit", async function (e) {
       e.preventDefault();
-      const username = document.getElementById("username").value;
-      const email = document.getElementById("email").value;
-      const displayName = document.getElementById("display-name").value;
-      const errorMessage = document.getElementById("error-message");
+
+      const username = document.getElementById("username").value.trim();
+      const email = document.getElementById("email").value.trim();
+      const displayName = document.getElementById("display-name").value.trim();
 
       try {
+        // Validate form inputs
+        validateForm(username, email, displayName);
+
+        // Start registration process
+        showLoading("Starting registration...");
+
         // Step 1: Register user and get challenge
         const registerResponse = await fetch("/register", {
           method: "POST",
@@ -89,14 +191,21 @@
           }),
         });
 
-        const challenge = await registerResponse.json();
-        if (!registerResponse.ok) {
-          throw new Error(challenge.message || "Registration failed");
+        let challenge;
+        try {
+          challenge = await registerResponse.json();
+        } catch (parseError) {
+          const errorText = await registerResponse.text();
+          throw new Error(`Server response not valid JSON: ${errorText}`);
         }
 
-        console.log("Challenge received:", challenge);
+        if (!registerResponse.ok) {
+          throw new Error(challenge.error || "Registration failed");
+        }
 
-        // Step 2: Create credentials using the challenge object as is
+        // Step 2: Create credentials
+        showLoading("Creating passkey...");
+
         const publicKeyCredentialCreationOptions = {
           ...challenge.publicKey,
           challenge: base64ToArrayBuffer(challenge.publicKey.challenge),
@@ -106,38 +215,12 @@
           },
         };
 
-        console.log(
-          "Creating credential with options:",
-          publicKeyCredentialCreationOptions
-        );
-
         const credential = await navigator.credentials.create({
           publicKey: publicKeyCredentialCreationOptions,
         });
 
-        console.log("Credential created:", credential);
-
-        // Step 3: Complete registration with properly formatted credential data
-        const rawId = arrayBufferToBase64(credential.rawId);
-        const attestationObject = arrayBufferToBase64(
-          credential.response.attestationObject
-        );
-        const clientDataJSON = arrayBufferToBase64(
-          credential.response.clientDataJSON
-        );
-
-        console.log("Sending completion data:", {
-          username,
-          credential: {
-            id: credential.id,
-            rawId: rawId, // Changed from raw_id
-            type: credential.type,
-            response: {
-              attestationObject: attestationObject, // Changed from attestation_object
-              clientDataJSON: clientDataJSON, // Changed from client_data_json
-            },
-          },
-        });
+        // Step 3: Complete registration
+        showLoading("Completing registration...");
 
         const completeResponse = await fetch("/register/complete", {
           method: "POST",
@@ -148,37 +231,53 @@
             username,
             credential: {
               id: credential.id,
-              rawId: rawId,
+              rawId: arrayBufferToBase64(credential.rawId),
               type: credential.type,
               response: {
-                attestationObject: attestationObject,
-                clientDataJSON: clientDataJSON,
+                attestationObject: arrayBufferToBase64(
+                  credential.response.attestationObject
+                ),
+                clientDataJSON: arrayBufferToBase64(
+                  credential.response.clientDataJSON
+                ),
               },
             },
           }),
         });
 
-        if (!completeResponse.ok) {
-          const errorData = await completeResponse.text();
-          console.error("Server response:", errorData);
+        let completeData;
+        try {
+          completeData = await completeResponse.json();
+        } catch (parseError) {
+          const errorText = await completeResponse.text();
           throw new Error(
-            `Registration completion failed: ${completeResponse.status} ${errorData}`
+            `Server completion response not valid JSON: ${errorText}`
           );
         }
 
-        const completeData = await completeResponse.json();
-        console.log("Registration complete:", completeData);
+        if (!completeResponse.ok) {
+          throw new Error(
+            completeData.error ||
+              `Registration completion failed: ${completeResponse.status}`
+          );
+        }
 
-        // Registration successful, redirect to login
-        window.location.href = "/login";
+        // Show success message
+        showSuccess("Registration successful! Redirecting to login...");
+
+        // Redirect to login page after a short delay
+        setTimeout(() => {
+          window.location.href = "/login";
+        }, 2000);
       } catch (error) {
-        console.error("Error during registration:", error);
-        errorMessage.textContent = error.message;
-        errorMessage.classList.remove("hidden");
+        console.error("Registration error:", error);
+        showError(`Registration error: ${error.message}`);
+        hideLoading();
       }
     });
+  });
 
-  // Utility functions remain the same
+  // Utility function to convert Base64URL to ArrayBuffer
   function base64ToArrayBuffer(base64url) {
     if (!base64url) {
       throw new Error("base64url string is required");
@@ -195,6 +294,7 @@
     return bytes.buffer;
   }
 
+  // Utility function to convert ArrayBuffer to Base64URL
   function arrayBufferToBase64(buffer) {
     const bytes = new Uint8Array(buffer);
     let binary = "";
